@@ -58,6 +58,7 @@
 
 ## News
 
+- **2026-07** — Slides from our ICML 2026 Booth Talk are now available on [Hugging Face Spaces](https://huggingface.co/spaces/harryhsing/OmniAgent-Slides). 📑
 - **2026-07** — Invited to give a Booth Talk on OmniAgent at the Alibaba (Qwen) booth, ICML 2026 (#B400, Jul 8, 13:20–13:40, Seoul). Come by to watch and discuss! 🎙️
 - **2026-06** — Released OmniAgent: code, a gym-like active-perception environment, RL/SFT checkpoints, example data formats, and the public SFT recipe.
 - **2026-06** — Paper available on [arXiv](https://arxiv.org/abs/2606.19341).
