@@ -58,24 +58,52 @@ val_data_size=16                                                        # prompt
 N=8                                                                     # rollout copies per prompt; train envs = train_data_size * N, val envs <= val_data_size * N
 actor_rollout_ref_N=1                                                   #   to fake actor_rollout_ref.rollout.n for [ppo_mini_batch_size] calculation
 
-mini_batch_size=16                                                      #   [! real_mini_bs=4*N=32 ! manually compensate for fake actor_rollout_ref_N on mini batch size normalization] mini_batch_size/num_of_gpus  16/16=1, self.gradient_accumulation = self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
+mini_batch_size="${PPO_MINI_BATCH_SIZE:-16}"                            # regular PPO value; ABS mode overrides this with the full rollout batch
 ppo_micro_batch_size_per_gpu=1                                          # actor - fsdp
+ppo_epochs="${PPO_EPOCHS:-1}"                                           # ABS mode requires exactly one PPO epoch
 rollout_log_prob_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu # rollout generate_sequence  - vllm
 ref_log_prob_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu     # ref - fsdp
 # Rollout generation chunking:
 # max alive envs per wave = total GPU count * MICRO_RATIO.
 # Larger rollout batches are split into multiple waves; lower MICRO_RATIO for A100 memory headroom.
 export MICRO_RATIO=2
-export ABS_ON_POLICY=True
+export ABS_ON_POLICY="${ABS_ON_POLICY:-True}"
 # ------------------------------------------------------------
-# If ABS_ON_POLICY is enabled, recompute mini_batch_size
+# Validate distributed batch sizes and configure ABS mode
 # ------------------------------------------------------------
-if [[ "${ABS_ON_POLICY,,}" == "true" || "${ABS_ON_POLICY}" == "1" ]]; then
-    world_size=$(( GPUS_PER_NODE * NNODES ))                # local variable only
-    mini_batch_size=$(( world_size * ppo_micro_batch_size_per_gpu ))
+world_size=$(( GPUS_PER_NODE * NNODES ))
+full_rollout_batch=$(( train_data_size * N ))
+if (( world_size <= 0 )); then
+    echo "ERROR: world_size must be positive, got ${world_size}" >&2
+    exit 1
+fi
+if (( full_rollout_batch % world_size != 0 )); then
+    echo "ERROR: rollout batch must be divisible by world size: full_rollout_batch=${full_rollout_batch}, world_size=${world_size}" >&2
+    exit 1
+fi
+case "${ABS_ON_POLICY}" in
+    1|[Tt]|[Tt][Rr][Uu][Ee]|[Yy]|[Yy][Ee][Ss])
+        if (( ppo_epochs != 1 )); then
+            echo "ERROR: ABS_ON_POLICY requires PPO_EPOCHS=1, got ${ppo_epochs}" >&2
+            exit 1
+        fi
+        mini_batch_size=${full_rollout_batch}
+        ;;
+esac
+mini_batch_numerator=$(( mini_batch_size * actor_rollout_ref_N ))
+if (( mini_batch_numerator % world_size != 0 )); then
+    echo "ERROR: PPO mini-batch normalization would truncate: mini_batch_size=${mini_batch_size}, rollout_n=${actor_rollout_ref_N}, world_size=${world_size}" >&2
+    exit 1
+fi
+normalized_mini_batch_size=$(( mini_batch_numerator / world_size ))
+if (( normalized_mini_batch_size < ppo_micro_batch_size_per_gpu || normalized_mini_batch_size % ppo_micro_batch_size_per_gpu != 0 )); then
+    echo "ERROR: normalized PPO mini-batch must be a positive multiple of the per-GPU micro-batch: normalized_mini_batch_size=${normalized_mini_batch_size}, ppo_micro_batch_size_per_gpu=${ppo_micro_batch_size_per_gpu}" >&2
+    exit 1
 fi
 echo "MICRO_RATIO   = ${MICRO_RATIO}"
 echo "ABS_ON_POLICY   = ${ABS_ON_POLICY}"
+echo "PPO_MINI_BATCH_SIZE   = ${mini_batch_size}"
+echo "PPO_EPOCHS   = ${ppo_epochs}"
 
 #DAPO
 clip_ratio_low=0.2
@@ -185,6 +213,7 @@ if [ "$NODE_RANK" -eq 0 ]; then
         actor_rollout_ref.model.use_remove_padding=True \
         actor_rollout_ref.actor.ppo_mini_batch_size=$mini_batch_size \
         actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu \
+        actor_rollout_ref.actor.ppo_epochs=$ppo_epochs \
         actor_rollout_ref.actor.use_kl_loss=$use_kl_loss \
         actor_rollout_ref.actor.kl_loss_coef=0.00 \
         actor_rollout_ref.actor.kl_loss_type=low_var_kl \

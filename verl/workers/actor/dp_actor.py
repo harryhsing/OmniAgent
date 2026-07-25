@@ -41,6 +41,11 @@ from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import (gather_outputs_and_unpad, ulysses_pad,
                                 ulysses_pad_and_slice_inputs)
 from verl.workers.actor import BasePPOActor
+from verl.workers.actor.optimizer_step_plan import (
+    build_optimizer_step_plan,
+    is_abs_on_policy_enabled,
+    validate_actor_batch_partition,
+)
 
 if is_cuda_available:
     from flash_attn.bert_padding import (index_first_axis, pad_input,
@@ -380,22 +385,34 @@ class DataParallelPPOActor(BasePPOActor):
         if "rollout_log_probs" in data.batch.keys():
             select_keys.append("rollout_log_probs")
 
+        self.apply_abs_on_policy = is_abs_on_policy_enabled(os.getenv("ABS_ON_POLICY"))
+        local_batch_size = data.batch.batch_size[0]
+        num_mini_batches = validate_actor_batch_partition(
+            local_batch_size=local_batch_size,
+            ppo_mini_batch_size=self.config.ppo_mini_batch_size,
+        )
+
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
         if has_multi_modal_inputs:
-            num_mini_batches = data.batch.batch_size[0] // self.config.ppo_mini_batch_size
-
-            print(f"per_gpu_sampes = {data.batch.batch_size[0]}, num_mini_batches = {num_mini_batches}, per_gpu_bs = {data.batch.batch_size[0]//num_mini_batches}")
+            print(f"per_gpu_sampes = {local_batch_size}, num_mini_batches = {num_mini_batches}, per_gpu_bs = {local_batch_size//num_mini_batches}")
             non_tensor_select_keys = ["multi_modal_inputs"]
             dataloader = data.select(select_keys, non_tensor_select_keys).chunk(num_mini_batches)
         else:
             batch = data.select(batch_keys=select_keys).batch
             dataloader = batch.split(self.config.ppo_mini_batch_size)
 
-        self.apply_abs_on_policy = os.getenv("ABS_ON_POLICY", "false").lower() in ("1", "true", "t", "yes", "y")
+        optimizer_step_plan = build_optimizer_step_plan(
+            abs_on_policy=self.apply_abs_on_policy,
+            num_mini_batches=num_mini_batches,
+            ppo_epochs=self.config.ppo_epochs,
+        )
 
         metrics = {}
+        if optimizer_step_plan.zero_grad_before_update:
+            self.actor_optimizer.zero_grad()
+
         for epoch in range(self.config.ppo_epochs):
             for batch_idx, data in enumerate(dataloader):
                 # split batch into micro_batches
@@ -413,7 +430,8 @@ class DataParallelPPOActor(BasePPOActor):
                     )
                     micro_batches = mini_batch.split(self.config.ppo_micro_batch_size_per_gpu)
 
-                self.actor_optimizer.zero_grad()
+                if optimizer_step_plan.zero_grad_before_mini_batch:
+                    self.actor_optimizer.zero_grad()
 
                 for data in micro_batches:
                     micro_batch_metrics = {}
@@ -462,6 +480,9 @@ class DataParallelPPOActor(BasePPOActor):
                         loss_scale_factor = response_mask.shape[0] / self.config.ppo_mini_batch_size
                     else:
                         loss_scale_factor = 1 / self.gradient_accumulation
+                    gradient_loss_scale_factor = (
+                        loss_scale_factor / optimizer_step_plan.outer_gradient_accumulation_steps
+                    )
                     # all return: (bsz, response_length)
 
                     # zhenghao 80/20
@@ -547,24 +568,20 @@ class DataParallelPPOActor(BasePPOActor):
                         micro_batch_metrics["actor/kl_loss"] = kl_loss.detach().item() * loss_scale_factor
                         micro_batch_metrics["actor/kl_coef"] = self.config.kl_loss_coef
 
-                    if self.config.use_dynamic_bsz:
-                        # relative to the dynamic bsz
-                        loss = policy_loss * loss_scale_factor
-                    else:
-                        loss = policy_loss * loss_scale_factor
+                    loss = policy_loss * gradient_loss_scale_factor
                     loss.backward()
 
                     micro_batch_metrics["actor/pg_loss"] = pg_loss.detach().item() * loss_scale_factor
                     append_to_dict(metrics, micro_batch_metrics)
 
-                if self.apply_abs_on_policy:
+                if not optimizer_step_plan.step_after_mini_batch:
                     continue
 
                 grad_norm = self._optimizer_step()
                 mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, mini_batch_metrics)
 
-        if self.apply_abs_on_policy:
+        if optimizer_step_plan.step_after_update:
             grad_norm = self._optimizer_step()
             mini_batch_metrics = {"actor/grad_norm": grad_norm.detach().item()}
             append_to_dict(metrics, mini_batch_metrics)
