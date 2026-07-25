@@ -32,6 +32,20 @@ def _contains_name(node: ast.AST, name: str) -> bool:
     return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
 
 
+def _load_will_only_validate():
+    source_path = _REPO_ROOT / "verl/trainer/main_ppo.py"
+    tree = ast.parse(source_path.read_text())
+    function_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_will_only_validate"
+    )
+    namespace = {}
+    module = ast.Module(body=[function_node], type_ignores=[])
+    exec(compile(module, str(source_path), "exec"), namespace)
+    return namespace["_will_only_validate"]
+
+
 class TestOmniAgentReliabilityContracts(unittest.TestCase):
     def test_abs_bypass_validation_runs_before_ray_initialization(self):
         source = (_REPO_ROOT / "verl/trainer/main_ppo.py").read_text()
@@ -53,7 +67,39 @@ class TestOmniAgentReliabilityContracts(unittest.TestCase):
             for node in ast.walk(run_ppo)
             if isinstance(node, ast.If) and _contains_name(node.test, "ray")
         )
+        validation_guard = next(
+            node
+            for node in ast.walk(run_ppo)
+            if isinstance(node, ast.If)
+            and any(child is validation_call for child in ast.walk(node))
+        )
+        self.assertTrue(_contains_name(validation_guard.test, "_will_only_validate"))
         self.assertLess(validation_call.lineno, ray_initialization.lineno)
+
+    def test_abs_bypass_validation_matches_actor_update_control_flow(self):
+        will_only_validate = _load_will_only_validate()
+        cases = (
+            (False, True, False),
+            (True, True, True),
+            (True, False, False),
+        )
+
+        for val_only, val_before_train, expected in cases:
+            with self.subTest(
+                val_only=val_only,
+                val_before_train=val_before_train,
+            ):
+                config = type(
+                    "Config",
+                    (),
+                    {
+                        "trainer": {
+                            "val_only": val_only,
+                            "val_before_train": val_before_train,
+                        },
+                    },
+                )()
+                self.assertEqual(will_only_validate(config), expected)
 
     def test_bypass_entropy_state_is_initialized_before_branch_and_shared_gate(self):
         source = (_REPO_ROOT / "verl/trainer/ppo/ray_trainer.py").read_text()

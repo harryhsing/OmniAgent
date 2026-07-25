@@ -33,15 +33,22 @@ def main(config):
     run_ppo(config)
 
 
+def _will_only_validate(config) -> bool:
+    val_only = bool(config.trainer.get("val_only", False))
+    val_before_train = bool(config.trainer.get("val_before_train", True))
+    return val_only and val_before_train
+
+
 def run_ppo(config) -> None:
     rollout_correction = config.algorithm.get("rollout_correction", None)
     bypass_mode = bool(
         rollout_correction and rollout_correction.get("bypass_mode", False)
     )
-    validate_abs_on_policy_rollout_compatibility(
-        abs_on_policy=is_abs_on_policy_enabled(os.getenv("ABS_ON_POLICY")),
-        bypass_mode=bypass_mode,
-    )
+    if not _will_only_validate(config):
+        validate_abs_on_policy_rollout_compatibility(
+            abs_on_policy=is_abs_on_policy_enabled(os.getenv("ABS_ON_POLICY")),
+            bypass_mode=bypass_mode,
+        )
 
     if not ray.is_initialized():
         # this is for local ray cluster
