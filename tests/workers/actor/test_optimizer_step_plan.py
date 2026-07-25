@@ -16,6 +16,8 @@ import runpy
 import unittest
 from pathlib import Path
 
+import torch
+
 
 _MODULE_PATH = Path(__file__).parents[3] / "verl/workers/actor/optimizer_step_plan.py"
 _MODULE = runpy.run_path(str(_MODULE_PATH))
@@ -26,12 +28,12 @@ validate_actor_batch_partition = _MODULE["validate_actor_batch_partition"]
 
 class TestOptimizerStepPlan(unittest.TestCase):
     def test_abs_on_policy_true_values(self):
-        for value in ("1", "True", " t ", "YES", "y"):
+        for value in ("1", "True", "t", "YES", "y"):
             with self.subTest(value=value):
                 self.assertTrue(is_abs_on_policy_enabled(value))
 
     def test_abs_on_policy_false_values(self):
-        for value in (None, "", "0", "false", "no", "unexpected"):
+        for value in (None, "", "0", "false", "no", "unexpected", " t ", " true "):
             with self.subTest(value=value):
                 self.assertFalse(is_abs_on_policy_enabled(value))
 
@@ -80,6 +82,65 @@ class TestOptimizerStepPlan(unittest.TestCase):
     def test_actor_batch_partition_rejects_remainder(self):
         with self.assertRaisesRegex(ValueError, "must be divisible"):
             validate_actor_batch_partition(local_batch_size=5, ppo_mini_batch_size=2)
+
+    def test_abs_on_policy_accumulates_the_mean_gradient(self):
+        parameter = torch.nn.Parameter(torch.tensor(1.0))
+        optimizer = torch.optim.SGD([parameter], lr=1.0)
+        coefficients = (2.0, 4.0, 6.0, 8.0)
+        plan = build_optimizer_step_plan(
+            abs_on_policy=True,
+            num_mini_batches=len(coefficients),
+            ppo_epochs=1,
+        )
+
+        gradient_reset_count = 0
+        optimizer_step_count = 0
+        if plan.zero_grad_before_update:
+            optimizer.zero_grad()
+            gradient_reset_count += 1
+
+        for coefficient in coefficients:
+            if plan.zero_grad_before_mini_batch:
+                optimizer.zero_grad()
+                gradient_reset_count += 1
+            loss = parameter * coefficient / plan.outer_gradient_accumulation_steps
+            loss.backward()
+            if plan.step_after_mini_batch:
+                optimizer.step()
+                optimizer_step_count += 1
+
+        if plan.step_after_update:
+            optimizer.step()
+            optimizer_step_count += 1
+
+        self.assertAlmostEqual(parameter.item(), -4.0)
+        self.assertEqual(gradient_reset_count, 1)
+        self.assertEqual(optimizer_step_count, 1)
+
+    def test_regular_ppo_steps_once_per_mini_batch(self):
+        parameter = torch.nn.Parameter(torch.tensor(1.0))
+        optimizer = torch.optim.SGD([parameter], lr=1.0)
+        coefficients = (2.0, 4.0, 6.0, 8.0)
+        plan = build_optimizer_step_plan(
+            abs_on_policy=False,
+            num_mini_batches=len(coefficients),
+            ppo_epochs=1,
+        )
+
+        gradient_reset_count = 0
+        optimizer_step_count = 0
+        for coefficient in coefficients:
+            if plan.zero_grad_before_mini_batch:
+                optimizer.zero_grad()
+                gradient_reset_count += 1
+            (parameter * coefficient).backward()
+            if plan.step_after_mini_batch:
+                optimizer.step()
+                optimizer_step_count += 1
+
+        self.assertAlmostEqual(parameter.item(), -19.0)
+        self.assertEqual(gradient_reset_count, len(coefficients))
+        self.assertEqual(optimizer_step_count, len(coefficients))
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ _TRUE_ENV_VALUES = frozenset({"1", "true", "t", "yes", "y"})
 
 def is_abs_on_policy_enabled(value: str | None) -> bool:
     """Parse ABS_ON_POLICY using the same values accepted by common env parsers."""
-    return value is not None and value.strip().lower() in _TRUE_ENV_VALUES
+    return value is not None and value.lower() in _TRUE_ENV_VALUES
 
 
 @dataclass(frozen=True)

@@ -58,7 +58,7 @@ val_data_size=8                                                         # prompt
 N=8                                                                     # rollout copies per prompt; train envs = train_data_size * N, val envs <= val_data_size * N
 actor_rollout_ref_N=1                                                   #   to fake actor_rollout_ref.rollout.n for [ppo_mini_batch_size] calculation
 
-mini_batch_size="${PPO_MINI_BATCH_SIZE:-16}"                            # regular PPO value; ABS mode overrides this with the full rollout batch
+mini_batch_size="${PPO_MINI_BATCH_SIZE:-16}"                            # regular PPO value; ABS mode overrides this with one micro-batch per rank
 ppo_micro_batch_size_per_gpu=1                                          # actor - fsdp
 ppo_epochs="${PPO_EPOCHS:-1}"                                           # ABS mode requires exactly one PPO epoch
 rollout_log_prob_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu # rollout generate_sequence  - vllm
@@ -72,13 +72,13 @@ export ABS_ON_POLICY="${ABS_ON_POLICY:-True}"
 # Validate distributed batch sizes and configure ABS mode
 # ------------------------------------------------------------
 world_size=$(( GPUS_PER_NODE * NNODES ))
-full_rollout_batch=$(( train_data_size * N ))
+rollout_trajectory_batch=$(( train_data_size * N ))
 if (( world_size <= 0 )); then
     echo "ERROR: world_size must be positive, got ${world_size}" >&2
     exit 1
 fi
-if (( full_rollout_batch % world_size != 0 )); then
-    echo "ERROR: rollout batch must be divisible by world size: full_rollout_batch=${full_rollout_batch}, world_size=${world_size}" >&2
+if (( rollout_trajectory_batch % world_size != 0 )); then
+    echo "ERROR: rollout trajectory batch must be divisible by world size: rollout_trajectory_batch=${rollout_trajectory_batch}, world_size=${world_size}" >&2
     exit 1
 fi
 case "${ABS_ON_POLICY}" in
@@ -87,7 +87,7 @@ case "${ABS_ON_POLICY}" in
             echo "ERROR: ABS_ON_POLICY requires PPO_EPOCHS=1, got ${ppo_epochs}" >&2
             exit 1
         fi
-        mini_batch_size=${full_rollout_batch}
+        mini_batch_size=$(( world_size * ppo_micro_batch_size_per_gpu ))
         ;;
 esac
 mini_batch_numerator=$(( mini_batch_size * actor_rollout_ref_N ))
