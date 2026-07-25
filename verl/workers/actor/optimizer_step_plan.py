@@ -23,6 +23,15 @@ def is_abs_on_policy_enabled(value: str | None) -> bool:
     return value is not None and value.lower() in _TRUE_ENV_VALUES
 
 
+def validate_abs_on_policy_rollout_compatibility(*, abs_on_policy: bool, bypass_mode: bool) -> None:
+    """Reject rollout modes that require conflicting old-log-probability anchors."""
+    if abs_on_policy and bypass_mode:
+        raise ValueError(
+            "ABS_ON_POLICY is incompatible with "
+            "algorithm.rollout_correction.bypass_mode=True"
+        )
+
+
 @dataclass(frozen=True)
 class OptimizerStepPlan:
     zero_grad_before_update: bool

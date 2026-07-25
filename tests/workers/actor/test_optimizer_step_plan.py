@@ -24,6 +24,9 @@ _MODULE = runpy.run_path(str(_MODULE_PATH))
 build_optimizer_step_plan = _MODULE["build_optimizer_step_plan"]
 is_abs_on_policy_enabled = _MODULE["is_abs_on_policy_enabled"]
 validate_actor_batch_partition = _MODULE["validate_actor_batch_partition"]
+validate_abs_on_policy_rollout_compatibility = _MODULE[
+    "validate_abs_on_policy_rollout_compatibility"
+]
 
 
 class TestOptimizerStepPlan(unittest.TestCase):
@@ -36,6 +39,29 @@ class TestOptimizerStepPlan(unittest.TestCase):
         for value in (None, "", "0", "false", "no", "unexpected", " t ", " true "):
             with self.subTest(value=value):
                 self.assertFalse(is_abs_on_policy_enabled(value))
+
+    def test_abs_on_policy_allows_decoupled_rollout_mode(self):
+        validate_abs_on_policy_rollout_compatibility(
+            abs_on_policy=True,
+            bypass_mode=False,
+        )
+
+    def test_regular_ppo_allows_rollout_bypass_mode(self):
+        validate_abs_on_policy_rollout_compatibility(
+            abs_on_policy=False,
+            bypass_mode=True,
+        )
+
+    def test_abs_on_policy_rejects_rollout_bypass_mode(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "ABS_ON_POLICY is incompatible with "
+            "algorithm.rollout_correction.bypass_mode=True",
+        ):
+            validate_abs_on_policy_rollout_compatibility(
+                abs_on_policy=True,
+                bypass_mode=True,
+            )
 
     def test_regular_ppo_steps_and_clears_each_mini_batch(self):
         plan = build_optimizer_step_plan(abs_on_policy=False, num_mini_batches=16, ppo_epochs=2)

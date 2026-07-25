@@ -1304,6 +1304,7 @@ class RayPPOTrainer:
                     rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
                     bypass_recomputing_logprobs = rollout_corr_config and rollout_corr_config.get("bypass_mode", False)
                     policy_loss_config = None
+                    entropys = None
 
                     # ===== 读取熵相关配置 =====
                     entropy_top_ratio   = self.config.algorithm.get("entropy_top_ratio", None)

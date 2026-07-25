@@ -59,7 +59,7 @@ N=8                                                                     # rollou
 actor_rollout_ref_N=1                                                   #   to fake actor_rollout_ref.rollout.n for [ppo_mini_batch_size] calculation
 
 ppo_micro_batch_size_per_gpu=1                                          # actor - fsdp
-ppo_epochs="${PPO_EPOCHS:-1}"                                           # ABS mode requires exactly one PPO epoch
+ppo_epochs=1                                                            # val-only: legal actor initialization; no optimizer update
 rollout_log_prob_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu # rollout generate_sequence  - vllm
 ref_log_prob_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu     # ref - fsdp
 # Rollout generation chunking:
@@ -76,14 +76,6 @@ if (( world_size <= 0 )); then
     exit 1
 fi
 mini_batch_size=$(( world_size * ppo_micro_batch_size_per_gpu ))
-case "${ABS_ON_POLICY}" in
-    1|[Tt]|[Tt][Rr][Uu][Ee]|[Yy]|[Yy][Ee][Ss])
-        if (( ppo_epochs != 1 )); then
-            echo "ERROR: ABS_ON_POLICY requires PPO_EPOCHS=1, got ${ppo_epochs}" >&2
-            exit 1
-        fi
-        ;;
-esac
 mini_batch_numerator=$(( mini_batch_size * actor_rollout_ref_N ))
 if (( mini_batch_numerator % world_size != 0 )); then
     echo "ERROR: PPO mini-batch normalization would truncate: mini_batch_size=${mini_batch_size}, rollout_n=${actor_rollout_ref_N}, world_size=${world_size}" >&2
@@ -273,10 +265,17 @@ if [ "$NODE_RANK" -eq 0 ]; then
         trainer.val_only=True "$@" \
         2>&1 | tee -a "logs/${experiment_name}.log"
 
+    run_status=${PIPESTATUS[0]}
     set -e # restore set -e
 
-    echo "Evaluation finished, shutting down cluster..."
-    ray stop --force
+    ray stop --force || true
+
+    if (( run_status != 0 )); then
+        echo "Evaluation failed with status ${run_status}" >&2
+    else
+        echo "Evaluation finished"
+    fi
+    exit "${run_status}"
 
 # ====== Worker Node: Join Ray Cluster Only ======
 else

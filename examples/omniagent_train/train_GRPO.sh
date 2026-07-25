@@ -292,10 +292,17 @@ if [ "$NODE_RANK" -eq 0 ]; then
         trainer.val_before_train=False "$@" \
         2>&1 | tee -a "logs/${experiment_name}.log" 
 
+    run_status=${PIPESTATUS[0]}
     set -e # restore set -e
 
-    echo "Training finished, shutting down cluster..."
-    ray stop --force
+    ray stop --force || true
+
+    if (( run_status != 0 )); then
+        echo "Training failed with status ${run_status}" >&2
+    else
+        echo "Training finished"
+    fi
+    exit "${run_status}"
 
 # ====== Worker Node: Join Ray Cluster Only ======
 else

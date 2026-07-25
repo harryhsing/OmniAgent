@@ -22,6 +22,10 @@ import ray
 
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.trainer.ppo.reward import load_reward_manager
+from verl.workers.actor.optimizer_step_plan import (
+    is_abs_on_policy_enabled,
+    validate_abs_on_policy_rollout_compatibility,
+)
 
 
 @hydra.main(config_path="config", config_name="ppo_trainer", version_base=None)
@@ -30,6 +34,15 @@ def main(config):
 
 
 def run_ppo(config) -> None:
+    rollout_correction = config.algorithm.get("rollout_correction", None)
+    bypass_mode = bool(
+        rollout_correction and rollout_correction.get("bypass_mode", False)
+    )
+    validate_abs_on_policy_rollout_compatibility(
+        abs_on_policy=is_abs_on_policy_enabled(os.getenv("ABS_ON_POLICY")),
+        bypass_mode=bypass_mode,
+    )
+
     if not ray.is_initialized():
         # this is for local ray cluster
         ray.init(
