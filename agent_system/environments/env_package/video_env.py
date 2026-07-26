@@ -293,6 +293,25 @@ def overlap_ratio(p: np.ndarray, g: np.ndarray) -> float:
     lg = np.sum(g[:, 1] - g[:, 0])
     return float(inter / (lp + lg - inter + 1e-12))
 
+
+def _score_temporal_prediction(p: np.ndarray, g: np.ndarray) -> tuple[float, bool]:
+    """Return temporal IoU and whether the whole prediction was rejected."""
+    if p.size and np.any(p[:, 0] > p[:, 1]):
+        return 0.0, True
+    return overlap_ratio(p, g), False
+
+
+def _apply_answer_format_reward(
+    reward: float,
+    use_format_reward: bool,
+    *,
+    suppress: bool = False,
+) -> float:
+    if use_format_reward and not suppress:
+        return 0.1 + 0.9 * reward
+    return reward
+
+
 def mean_relative_accuracy(pred, target, start=0.5, end=0.95, interval=0.05):
     if not torch.is_tensor(pred):
         pred = torch.tensor(pred, dtype=torch.float32)
@@ -913,6 +932,7 @@ class SingleVideoQAEnv:
         # ---------- answer ----------
         if atype == "answer":
             content=act.get("content")
+            rejected_temporal_prediction = False
             if self.question_type=="MCQ":
                 if not self.answer:
                     won=False; reward=0.0
@@ -954,8 +974,10 @@ class SingleVideoQAEnv:
                     # If the list length is not 2 or the content is not numeric, an error will occur here
                     return self._fail(*_err(Err.SPAN_FORMAT, str(e)))
 
-                # 5. Compute IoU
-                iou = overlap_ratio(p, g)
+                # 5. Reject the whole prediction if any span is reversed.
+                # This is a valid JSON answer, so it must finish normally with
+                # zero reward rather than entering the format-error retry path.
+                iou, rejected_temporal_prediction = _score_temporal_prediction(p, g)
                 won     =  iou>=0.5
                 reward  =  iou 
             # ---------- FF  (NEW) ----------
@@ -1020,8 +1042,11 @@ class SingleVideoQAEnv:
             self.done=True
             self.history.append(self.build_user_msg("CORRECT ANSWER" if won else "INCORRECT ANSWER"))
 
-            if self.use_format_reward:
-                reward = 0.1 + 0.9*reward
+            reward = _apply_answer_format_reward(
+                reward,
+                self.use_format_reward,
+                suppress=rejected_temporal_prediction,
+            )
 
             # ---------- Length bonus (only when enabled & won) ----------
             bonus = 0.0
