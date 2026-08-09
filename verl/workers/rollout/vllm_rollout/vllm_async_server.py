@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
-from collections.abc import AsyncGenerator
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from collections.abc import AsyncGenerator, Callable
+from typing import Any, Optional, Union
 
 import cloudpickle
 import ray
@@ -56,7 +56,7 @@ class ExternalRayDistributedExecutor(Executor):
         vllm_tp_size = self.vllm_config.parallel_config.tensor_parallel_size
         assert len(actor_names) == vllm_dp_size * vllm_tp_size, f"instance_id: {self.vllm_config.instance_id} has {len(actor_names)} actors, but vllm_dp_size: {vllm_dp_size} * vllm_tp_size: {vllm_tp_size} = {vllm_dp_size * vllm_tp_size} is expected."
 
-        def get_pg_index_and_local_rank(actor_name) -> Tuple[int, int]:
+        def get_pg_index_and_local_rank(actor_name) -> tuple[int, int]:
             fields = actor_name.split(":")
             assert len(fields) == 2, f"invalid actor name: {actor_name}"
             pg_index, local_rank = int(fields[0].split("_")[-1]), int(fields[1])
@@ -65,7 +65,7 @@ class ExternalRayDistributedExecutor(Executor):
         # sort actor names by pg_index and local_rank
         actor_names = sorted(actor_names, key=get_pg_index_and_local_rank)
         actor_names = actor_names[vllm_dp_rank * vllm_tp_size : (vllm_dp_rank + 1) * vllm_tp_size]
-        self.workers: List[WorkerWrapperBase] = [ray.get_actor(actor_name) for actor_name in actor_names]
+        self.workers: list[WorkerWrapperBase] = [ray.get_actor(actor_name) for actor_name in actor_names]
         print(f"instance_id: {self.vllm_config.instance_id} intializes with external actors: {actor_names}")
 
         kwargs = dict(
@@ -84,9 +84,9 @@ class ExternalRayDistributedExecutor(Executor):
         self,
         method: Union[str, Callable],
         timeout: Optional[float] = None,
-        args: Tuple = (),
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> List[Any]:
+        args: tuple = (),
+        kwargs: Optional[dict[str, Any]] = None,
+    ) -> list[Any]:
         # TODO(wuxibin): support ray compiled graph
         if isinstance(method, str):
             sent_method = method
@@ -220,7 +220,7 @@ class AsyncvLLMServer(AsyncServerBase):
             assert isinstance(generator, ChatCompletionResponse)
             return JSONResponse(content=generator.model_dump())
 
-    async def chat_completion_generator(self, request: ChatCompletionRequest) -> AsyncGenerator[Tuple[int, str]]:
+    async def chat_completion_generator(self, request: ChatCompletionRequest) -> AsyncGenerator[tuple[int, str]]:
         """Direct chat completion without FastAPI.
 
         Args:

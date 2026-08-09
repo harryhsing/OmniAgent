@@ -30,7 +30,7 @@ import logging
 import os
 from contextlib import contextmanager
 from copy import deepcopy
-from typing import Any, Dict, List, Union
+from typing import Any, Union
 
 import numpy as np
 import torch
@@ -45,8 +45,7 @@ from vllm.worker.worker_base import WorkerWrapperBase
 from verl import DataProto
 from verl.third_party.vllm import vllm_version
 from verl.utils.debug import GPUMemoryLogger
-from verl.utils.torch_functional import (get_response_mask,
-                                         pad_2d_list_to_length)
+from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
 
 logger = logging.getLogger(__file__)
@@ -59,7 +58,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 # NOTE(sgm): add for verl. We can optimize it by making the dataloader yield List[int] without padding.
-def _pre_process_inputs(pad_token_id, prompt_token_ids: torch.Tensor) -> List[int]:
+def _pre_process_inputs(pad_token_id, prompt_token_ids: torch.Tensor) -> list[int]:
     # remove the left padding in the prompt token_id
     # pad_token_id = self.llm_engine.tokenizer.pad_token_id if self.llm_engine.tokenizer.pad_token_id
     # is not None else self.llm_engine.tokenizer.eos_token_id
@@ -68,7 +67,7 @@ def _pre_process_inputs(pad_token_id, prompt_token_ids: torch.Tensor) -> List[in
     return token_ids
 
 
-def _repeat_interleave(value: Union[torch.Tensor, np.ndarray], repeats: int) -> Union[torch.Tensor, List[Any]]:
+def _repeat_interleave(value: Union[torch.Tensor, np.ndarray], repeats: int) -> Union[torch.Tensor, list[Any]]:
     if isinstance(value, torch.Tensor):
         return value.repeat_interleave(repeats, dim=0)
     else:
@@ -120,11 +119,7 @@ class vLLMRollout(BaseRollout):
             elif hasattr(model_hf_config, "text_config") and hasattr(model_hf_config.text_config, "max_position_embeddings"):
                 max_position_embeddings = model_hf_config.text_config.max_position_embeddings
             # zhenghao omni add
-            elif (
-                hasattr(model_hf_config, "thinker_config")
-                and hasattr(model_hf_config.thinker_config, "text_config")
-                and hasattr(model_hf_config.thinker_config.text_config, "max_position_embeddings")
-            ):
+            elif hasattr(model_hf_config, "thinker_config") and hasattr(model_hf_config.thinker_config, "text_config") and hasattr(model_hf_config.thinker_config.text_config, "max_position_embeddings"):
                 max_position_embeddings = model_hf_config.thinker_config.text_config.max_position_embeddings
             if max_position_embeddings is None:
                 raise ValueError("max_position_embeddings not found in model_hf_config")
@@ -161,7 +156,7 @@ class vLLMRollout(BaseRollout):
             limit_mm_per_prompt = None
         ##########################
 
-        lora_kwargs = kwargs.pop('lora_kwargs', {})
+        lora_kwargs = kwargs.pop("lora_kwargs", {})
         self.lora_kwargs = lora_kwargs
         # copy it to avoid secretly modifying the engine config
         engine_kwargs = {} if "engine_kwargs" not in config or "vllm" not in config.engine_kwargs else OmegaConf.to_container(deepcopy(config.engine_kwargs.vllm))
@@ -180,8 +175,8 @@ class vLLMRollout(BaseRollout):
             enforce_eager=config.enforce_eager,
             gpu_memory_utilization=config.gpu_memory_utilization,
             disable_custom_all_reduce=True,
-            disable_mm_preprocessor_cache=True, # new zhenghao
-            disable_cascade_attn=True, # new zhenghao
+            disable_mm_preprocessor_cache=True,  # new zhenghao
+            disable_cascade_attn=True,  # new zhenghao
             limit_mm_per_prompt=limit_mm_per_prompt,
             skip_tokenizer_init=False,
             max_model_len=max_model_len,
@@ -267,19 +262,17 @@ class vLLMRollout(BaseRollout):
             raise RuntimeError("vllm sharding manager is not work properly.")
 
         if "multi_modal_data" in non_tensor_batch:
-
             # zhenghao add for omni, w.r.t. use_audio_in_video flag
             vllm_inputs = []
-            raw_prompt_ids_list   = non_tensor_batch.pop("raw_prompt_ids")
-            mm_data_list          = non_tensor_batch.pop("multi_modal_data")
+            raw_prompt_ids_list = non_tensor_batch.pop("raw_prompt_ids")
+            mm_data_list = non_tensor_batch.pop("multi_modal_data")
             # mm_processor_kwargs 可能不存在；统一拉成与 batch 等长的列表
             mm_kwargs_list = non_tensor_batch.pop("mm_processor_kwargs")
-            for raw_ids, mm_data, mm_kw in zip(raw_prompt_ids_list, mm_data_list, mm_kwargs_list):
-                inp = { "prompt_token_ids": raw_ids, "multi_modal_data": mm_data, "mm_processor_kwargs": mm_kw}
+            for raw_ids, mm_data, mm_kw in zip(raw_prompt_ids_list, mm_data_list, mm_kwargs_list, strict=False):
+                inp = {"prompt_token_ids": raw_ids, "multi_modal_data": mm_data, "mm_processor_kwargs": mm_kw}
                 vllm_inputs.append(inp)
         else:
             vllm_inputs = [{"prompt_token_ids": raw_prompt_ids} for raw_prompt_ids in non_tensor_batch.pop("raw_prompt_ids")]
-
 
         # ensure the type of `prompt_token_ids` passed to vllm is list[int]
         # https://github.com/volcengine/verl/pull/772
@@ -316,8 +309,8 @@ class vLLMRollout(BaseRollout):
         if self.lora_kwargs:
             lora_int_ids = list(self.inference_engine.llm_engine.list_loras())
             if len(lora_int_ids) > 0:
-                lora_int_id=lora_int_ids[0]
-                lora_requests = [LoRARequest(lora_name=f"{lora_int_id}",lora_int_id=lora_int_id,lora_path="/simon-stub-path")] * batch_size
+                lora_int_id = lora_int_ids[0]
+                lora_requests = [LoRARequest(lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/simon-stub-path")] * batch_size
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
@@ -331,10 +324,10 @@ class vLLMRollout(BaseRollout):
                     use_tqdm=False,
                 )
             except Exception as e:
-                import traceback
                 from collections import Counter
-                print("\n" + "="*40 + " DEEP FORENSIC REPORT " + "="*40)
-                
+
+                print("\n" + "=" * 40 + " DEEP FORENSIC REPORT " + "=" * 40)
+
                 # Qwen2.5-Omni/VL 常用特殊 Token 参考表
                 # 151643: <|endoftext|>
                 # 151644: <|im_start|>
@@ -350,23 +343,28 @@ class vLLMRollout(BaseRollout):
                 # "audio_end_token_id": 151648,
                 # "audio_start_token_id": 151647,
                 # "audio_token_index": 151646,
-                
+
                 for idx, inp in enumerate(vllm_inputs):
                     print(f"\n>>> Batch Item {idx}")
                     p_ids = inp.get("prompt_token_ids", [])
-                    
+
                     # 1. 统计所有特殊 Token (>151640)
                     special_tokens = [t for t in p_ids if t >= 151640]
                     ctr = Counter(special_tokens)
-                    print(f"[Special Token Histogram]:")
+                    print("[Special Token Histogram]:")
                     for token_id, count in sorted(ctr.items()):
                         # 尝试猜测 Token 含义
                         note = ""
-                        if token_id == 151652: note = " (<|vision_start|> ?)"
-                        if token_id == 151653: note = " (<|vision_end|> ?)"
-                        if token_id == 151655: note = " (<|image_pad|> ?)"
-                        if token_id == 151644: note = " (<|im_start|>)"
-                        if token_id == 151645: note = " (<|im_end|>)"
+                        if token_id == 151652:
+                            note = " (<|vision_start|> ?)"
+                        if token_id == 151653:
+                            note = " (<|vision_end|> ?)"
+                        if token_id == 151655:
+                            note = " (<|image_pad|> ?)"
+                        if token_id == 151644:
+                            note = " (<|im_start|>)"
+                        if token_id == 151645:
+                            note = " (<|im_end|>)"
                         print(f"  ID {token_id}: {count} occurrences{note}")
 
                     # 2. 检查开头 System Prompt 区域有没有混入 Vision Token
@@ -374,7 +372,7 @@ class vLLMRollout(BaseRollout):
                     try:
                         first_im_end = p_ids.index(151645)
                         sys_region = p_ids[:first_im_end]
-                        sys_specials = [t for t in sys_region if t >= 151650] # 只看多模态相关的
+                        sys_specials = [t for t in sys_region if t >= 151650]  # 只看多模态相关的
                         if sys_specials:
                             print(f"[!!! ALERT !!!] Found Suspicious Tokens in SYSTEM PROMPT Region: {sys_specials}")
                         else:
@@ -384,10 +382,10 @@ class vLLMRollout(BaseRollout):
 
                     # 3. 再次确认 MM Data
                     mm_data = inp.get("multi_modal_data", {})
-                    img_count = len(mm_data.get('image', [])) if mm_data else 0
+                    img_count = len(mm_data.get("image", [])) if mm_data else 0
                     print(f"[MM Data Count] Image: {img_count}")
 
-                print("="*100 + "\n")
+                print("=" * 100 + "\n")
                 raise RuntimeError(f"vLLM generate() failed: {e}") from None
 
             # TODO(sgm): disable logprob when recompute_log_prob is enable
@@ -440,7 +438,7 @@ class vLLMRollout(BaseRollout):
                 "prompts": idx,
                 "responses": response,
                 "input_ids": seq,  # here input_ids become the whole sentences
-                'rollout_log_probs': rollout_log_probs, # we will recompute old log prob with actor
+                "rollout_log_probs": rollout_log_probs,  # we will recompute old log prob with actor
                 "attention_mask": attention_mask,
                 "position_ids": position_ids,
             },
@@ -472,7 +470,7 @@ class vLLMAsyncRollout:
         self.sharding_manager = None
         self.is_sleep = False
 
-    def init_worker(self, all_kwargs: List[Dict[str, Any]]):
+    def init_worker(self, all_kwargs: list[dict[str, Any]]):
         """Initialize worker engine."""
         all_kwargs[0]["rank"] = int(os.environ["RANK"])
         all_kwargs[0]["local_rank"] = 0
